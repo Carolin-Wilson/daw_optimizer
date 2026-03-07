@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+*.wav
+*.mp3
+*.flac
+*.ckpt
+*.pt
+*.pth
+node_modules/
