@@ -11,3 +11,8 @@ __pycache__/
 *.pt
 *.pth
 node_modules/
+*.h5
+*.onnx
+*.pb
+models/
+datasets/

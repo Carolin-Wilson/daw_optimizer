@@ -1,7 +1,8 @@
+import os
 import reapy
 import librosa
 import numpy as np
-import os
+import soundfile as sf
 
 
 def analyze_and_organize(rename=True):
@@ -75,3 +76,39 @@ def run_optimization(target, num_stems, basis, rename):
 
     # Right now we just run the analyzer
     analyze_and_organize(rename) 
+
+def export_tracks(target, num_stems, basis):
+    project = reapy.Project()
+
+    print("📦 Starting export process...")
+
+    if target == "all":
+        tracks = project.tracks
+    elif target == "selected":
+        tracks = project.selected_tracks
+    else:
+        tracks = project.tracks
+
+    export_folder = "exports"
+    os.makedirs(export_folder, exist_ok=True)
+
+    for track in tracks:
+        if len(track.items) == 0:
+            print(f"⏭️ Skipping {track.name} (no items)")
+            continue
+
+        item = track.items[0]
+        take = item.active_take
+        source_path = take.source.filename
+
+        if not source_path or not os.path.isfile(source_path):
+            print(f"⚠️ Skipping {track.name}: source file not found")
+            continue
+
+        out_path = os.path.join(export_folder, f"{track.name}.wav")
+        print(f"Exporting {track.name} → {out_path}")
+
+        y, sr = librosa.load(source_path, sr=None, mono=False)
+        sf.write(out_path, y.T if y.ndim > 1 else y, sr)
+
+    print("✅ Export finished!")

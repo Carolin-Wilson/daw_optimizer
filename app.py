@@ -30,6 +30,22 @@ def optimize():
         "message": "Full DAW organisation complete!"
     })
 
+@app.route('/export', methods=['POST'])
+def export():
+
+    data = request.json
+
+    target = data.get('target')
+    num_stems = data.get('numStems')
+    basis = data.get('basis')
+    rename = data.get('rename')
+
+    print("📦 Exporting tracks...")
+
+    analyzer.export_tracks(target, num_stems, basis)
+
+    return jsonify({"status": "success", "message": "Export complete!"})
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

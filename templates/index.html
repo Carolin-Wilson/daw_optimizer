@@ -52,6 +52,8 @@
     </div>
 
     <button onclick="runOptimizer()">Optimize Session</button>
+    <button onclick="exportTracks()">Export Audio</button>
+
     <div id="status"></div>
 </div>
 
@@ -87,6 +89,27 @@
         const result = await response.json();
         document.getElementById('status').innerText = result.message;
     }
+
+    async function exportTracks() {
+
+        document.getElementById('status').innerText = "Exporting...";
+
+        const payload = {
+            target: document.getElementById('target').value,
+            numStems: document.getElementById('num-stems').value,
+            basis: document.getElementById('basis').value,
+            rename: document.getElementById('rename').checked
+        };
+
+        const response = await fetch('/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+        document.getElementById('status').innerText = result.message;
+        }
 </script>
 
 </body>
