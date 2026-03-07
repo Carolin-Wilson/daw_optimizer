@@ -1,0 +1,7 @@
+flask
+librosa
+numpy
+reapy
+soundfile
+tensorflow>=2.12
+tensorflow_hub
