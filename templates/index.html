@@ -91,8 +91,7 @@
     }
 
     async function exportTracks() {
-
-        document.getElementById('status').innerText = "Exporting...";
+        document.getElementById('status').innerText = "⏳ Building export zip...";
 
         const payload = {
             target: document.getElementById('target').value,
@@ -101,14 +100,32 @@
             rename: document.getElementById('rename').checked
         };
 
-        const response = await fetch('/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        try {
+            const response = await fetch('/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
 
-        const result = await response.json();
-        document.getElementById('status').innerText = result.message;
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
+            }
+
+            // Get the zip as a binary blob and trigger browser download
+            const blob = await response.blob();
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href     = url;
+            a.download = 'stems_export.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+
+            document.getElementById('status').innerText = "✅ Download started — stems_export.zip";
+        } catch (err) {
+            document.getElementById('status').innerText = "❌ Export failed: " + err.message;
+        }
         }
 </script>
 

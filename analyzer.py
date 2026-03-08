@@ -20,6 +20,11 @@ _panns_labels = None
 # CREPE flag (optional – needs: pip install crepe)
 _CREPE_AVAILABLE = None   # None = unchecked, True/False after first attempt
 
+# ── Classification cache: filepath → label
+# Populated by analyze_and_organize() and used by export_tracks() so that
+# the export always knows the correct stem category even when rename=False.
+_track_labels: dict = {}   # {source_filepath: label_string}
+
 # ── Ensemble weights (must sum to 1.0)
 # Adjust these if one model consistently outperforms the others.
 WEIGHT_YAMNET   = 0.40   # YAMNet Google/AudioSet
@@ -194,14 +199,13 @@ def _load_active_segment(filepath, sr=YAMNET_SR, target_duration=4.0,
     --------
     1. Load up to ``max_scan_secs`` of the file at 8 kHz (cheap probe) to find
        the first non-silent region quickly.
-    2. librosa.effects.split() returns FRAME indices with hop_length=512.
-       Convert to seconds: offset = frame_idx * hop_length / probe_sr.
+    2. librosa.effects.split() returns SAMPLE indices — divide by probe_sr to
+       get seconds.
     3. Return a ``target_duration``-second clip from that offset.
        Falls back to the raw file start if everything is silent.
     """
-    probe_sr   = 8000          # cheap probe sample rate
-    probe_hop  = 512           # default hop used by librosa.effects.split
-    probe_dur  = min(max_scan_secs, 300.0)
+    probe_sr  = 8000           # cheap probe sample rate
+    probe_dur = min(max_scan_secs, 300.0)
 
     try:
         y_probe, _ = librosa.load(
@@ -224,13 +228,11 @@ def _load_active_segment(filepath, sr=YAMNET_SR, target_duration=4.0,
         print("   ⚠️  No active audio found in probe — using file start.")
         offset = 0.0
     else:
-        # ── CORRECT frame→seconds conversion:
-        #    split() returns frame indices at hop_length=512 (not sample indices).
-        #    offset_seconds = first_active_frame × hop_length / probe_sr
-        first_active_frame = int(intervals[0][0])
-        offset = float(first_active_frame) * probe_hop / probe_sr
-        print(f"   ⏩ Silence skip: {offset:.2f}s (frame {first_active_frame} × "
-              f"{probe_hop} / {probe_sr})")
+        # librosa.effects.split() returns SAMPLE indices (not frame indices).
+        # offset_seconds = sample_index / sample_rate  ← correct conversion
+        first_active_sample = int(intervals[0][0])
+        offset = float(first_active_sample) / probe_sr
+        print(f"   ⏩ Silence skip: {offset:.2f}s")
 
     # Now load the real audio starting at the detected offset
     y, _ = librosa.load(
@@ -1036,7 +1038,11 @@ def analyze_and_organize(rename=True):
 
             label, class_idx, yamnet_top, feats, ens_scores = _classify_audio_yamnet(filepath)
 
-            # ── Skip silent tracks entirely — don't rename or recolour
+            # Always cache the label for export_tracks() to use later,
+            # regardless of whether we rename the REAPER track.
+            _track_labels[filepath] = label
+
+            # ── Skip silent tracks — don’t rename or recolour
             if label == "SILENCE":
                 print(f"   🔇 Track is silent or empty — skipping rename/colour.\n")
                 continue
@@ -1069,15 +1075,40 @@ def analyze_and_organize(rename=True):
 
             if rename:
                 track.name = f"{instrument_safe}_{track.index + 1}"
+                print(f"   ✅ Identified as: {label} | Track renamed & coloured!\n")
+            else:
+                print(f"   ✅ Identified as: {label} | Track coloured (rename off).\n")
             track.color = color
-
-            print(f"   ✅ Identified as: {label} | Track Updated!\n")
 
         except Exception as e:
             print(f"⚠️ Error on '{track.name}': {e}")
             traceback.print_exc()
 
     print("🎉 Full DAW Organization Complete! Check REAPER.")
+
+
+def _category_from_track(track_name, source_path):
+    """
+    Determine the export category for a track.
+    Priority:
+      1. classification cache (populated by analyze_and_organize)
+      2. parse the track name (e.g. 'VOCAL_9' → 'VOCAL')
+      3. fallback to 'OTHER'
+    """
+    # 1. Cache lookup
+    if source_path and source_path in _track_labels:
+        lbl = _track_labels[source_path]
+        if lbl != "SILENCE":
+            return lbl
+
+    # 2. Parse track name
+    safe = _sanitize_track_name(track_name).upper()
+    ordered = sorted(_ALL_BUCKETS, key=len, reverse=True)
+    for bucket in ordered:
+        if safe.startswith(bucket):
+            return bucket
+
+    return "OTHER"
 
 
 # -------------------------------------------------------
@@ -1094,36 +1125,76 @@ def run_optimization(target, num_stems, basis, rename):
     analyze_and_organize(rename)
 
 
-def export_tracks(target, num_stems, basis):
+def export_tracks(target, num_stems, basis, rename=True):
+    """
+    Collect all classified tracks, write each WAV into a per-category
+    sub-folder inside a ZIP, and return the ZIP as raw bytes.
+
+    ZIP layout:
+        stems_export/
+            VOCAL/
+                VOCAL_9.wav
+                VOCAL_13.wav
+            BASS/
+                BASS_7.wav
+            GUITAR/
+                GUITAR_3.wav
+            ...
+    """
+    import io, zipfile
+
     project = reapy.Project()
-    print("📦 Starting export process...")
+    print("❌️ Starting zip export...")
 
     if target == "selected":
         tracks = project.selected_tracks
     else:
         tracks = project.tracks
 
-    export_folder = "exports"
-    os.makedirs(export_folder, exist_ok=True)
+    # In-memory zip buffer
+    zip_buffer = io.BytesIO()
 
-    for track in tracks:
-        if len(track.items) == 0:
-            print(f"⏭️ Skipping {track.name} (no items)")
-            continue
+    with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for track in tracks:
+            if len(track.items) == 0:
+                print(f"⏭️ Skipping {track.name} (no items)")
+                continue
 
-        item        = track.items[0]
-        take        = item.active_take
-        source_path = _resolve_audio_path(take.source.filename)
+            item        = track.items[0]
+            take        = item.active_take
+            source_path = _resolve_audio_path(take.source.filename)
 
-        if not source_path or not os.path.isfile(source_path):
-            print(f"⚠️ Skipping {track.name}: source file not found")
-            continue
+            if not source_path or not os.path.isfile(source_path):
+                print(f"⚠️ Skipping {track.name}: source file not found")
+                continue
 
-        safe_name = _sanitize_track_name(track.name)
-        out_path  = os.path.join(export_folder, f"{safe_name}.wav")
-        print(f"Exporting {track.name} → {out_path}")
+            safe_name = _sanitize_track_name(track.name)
 
-        y, sr = librosa.load(source_path, sr=None, mono=False)
-        sf.write(out_path, y.T if y.ndim > 1 else y, sr)
+            # ── Category: classification cache first, then name parse
+            category = _category_from_track(track.name, source_path)
 
-    print("✅ Export finished!")
+            # ── Filename inside the zip:
+            #    rename=True  → track was renamed to e.g. "VOCAL_9" → use that
+            #    rename=False → keep the original source audio filename
+            orig_stem   = os.path.splitext(os.path.basename(source_path))[0]
+            export_name = safe_name if rename else orig_stem
+
+            # Load with original sample rate, preserve stereo if present
+            try:
+                y, sr = librosa.load(source_path, sr=None, mono=False)
+            except Exception as exc:
+                print(f"⚠️ Could not load {track.name}: {exc}")
+                continue
+
+            # Encode WAV to an in-memory buffer
+            wav_buf = io.BytesIO()
+            sf.write(wav_buf, y.T if y.ndim > 1 else y, sr, format="WAV")
+            wav_bytes = wav_buf.getvalue()
+
+            zip_path = f"stems_export/{category}/{export_name}.wav"
+            zf.writestr(zip_path, wav_bytes)
+            print(f"  ✅  {track.name} → {zip_path}")
+
+    zip_buffer.seek(0)
+    print("✅ Zip export complete!")
+    return zip_buffer

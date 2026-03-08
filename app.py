@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 import analyzer   # connects to analyzer.py
 
 app = Flask(__name__)
@@ -32,20 +32,23 @@ def optimize():
 
 @app.route('/export', methods=['POST'])
 def export():
-
-    data = request.json
-
-    target = data.get('target')
+    data      = request.json
+    target    = data.get('target')
     num_stems = data.get('numStems')
-    basis = data.get('basis')
-    rename = data.get('rename')
+    basis     = data.get('basis')
+    rename    = data.get('rename', True)   # passed from UI checkbox
 
-    print("📦 Exporting tracks...")
+    print("📦 Exporting tracks as zip...")
 
-    analyzer.export_tracks(target, num_stems, basis)
+    zip_buffer = analyzer.export_tracks(target, num_stems, basis, rename)
 
-    return jsonify({"status": "success", "message": "Export complete!"})
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='stems_export.zip'
+    )
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000)
